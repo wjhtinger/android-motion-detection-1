@@ -2,6 +2,8 @@ package com.jjoe64.motiondetection.motiondetection;
 
 //import android.util.Log;
 
+import android.util.Log;
+
 public class AggregateLumaMotionDetection implements IMotionDetection {
 
     // private static final String TAG = "AggregateLumaMotionDetection";
@@ -56,12 +58,15 @@ public class AggregateLumaMotionDetection implements IMotionDetection {
     public boolean detect(int[] luma, int width, int height) {
         if (luma == null) throw new NullPointerException();
 
-        int[] original = luma.clone();
+        //int[] original = luma.clone();
 
         // Create the "mPrevious" picture, the one that will be used to check
         // the next frame against.
         if (mPrevious == null) {
-            mPrevious = original;
+            mPrevious = new int[luma.length];
+            System.arraycopy(luma, 0, mPrevious, 0, luma.length);
+
+            //mPrevious = original;
             mPreviousWidth = width;
             mPreviousHeight = height;
             // Log.i(TAG, "Creating background image");
@@ -73,7 +78,8 @@ public class AggregateLumaMotionDetection implements IMotionDetection {
         // Log.d(TAG, "Detection "+(aDetection-bDetection));
 
         // Replace the current image with the previous.
-        mPrevious = original;
+        //mPrevious = original;
+        System.arraycopy(luma, 0, mPrevious, 0, luma.length);
         mPreviousWidth = width;
         mPreviousHeight = height;
 
@@ -82,5 +88,10 @@ public class AggregateLumaMotionDetection implements IMotionDetection {
 
     public void setLeniency(int l) {
         mLeniency = l;
+    }
+
+    public void clear(){
+        mPrevious = null;
+        mPreviousState = null;
     }
 }
