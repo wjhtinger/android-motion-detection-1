@@ -26,18 +26,25 @@ public class MainActivity extends AppCompatActivity {
 
         txtStatus = (TextView) findViewById(R.id.txtStatus);
 
-        motionDetector = new MotionDetector(this, (SurfaceView) findViewById(R.id.surfaceView));
+
+        motionDetector = new MotionDetector(this, null);
+
+        //motionDetector = new MotionDetector(this, (SurfaceView) findViewById(R.id.surfaceView));
         motionDetector.setMotionDetectorCallback(new MotionDetectorCallback() {
             @Override
             public void onMotionDetected() {
                 Vibrator v = (Vibrator) getSystemService(Context.VIBRATOR_SERVICE);
-                v.vibrate(80);
-                txtStatus.setText("Motion detected");
+                //v.vibrate(80);
+                //txtStatus.setText("Motion detected");
             }
 
             @Override
             public void onTooDark() {
                 txtStatus.setText("Too dark here");
+            }
+
+            public void onContent(String file){
+
             }
         });
 
@@ -45,6 +52,7 @@ public class MainActivity extends AppCompatActivity {
         //motionDetector.setCheckInterval(500);
         //motionDetector.setLeniency(20);
         //motionDetector.setMinLuma(1000);
+        motionDetector.setContentType(0);
     }
 
     @Override

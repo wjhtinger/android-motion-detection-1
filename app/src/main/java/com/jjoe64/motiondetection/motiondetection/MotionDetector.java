@@ -1,17 +1,34 @@
 package com.jjoe64.motiondetection.motiondetection;
 
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.ImageFormat;
+import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
+import android.media.MediaRecorder;
+import android.net.Uri;
+import android.opengl.GLES11Ext;
+import android.os.Environment;
 import android.os.Handler;
 import android.util.Log;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.widget.TextView;
 
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
+import static java.lang.Thread.sleep;
 
 public class MotionDetector {
     class MotionDetectorThread extends Thread {
@@ -27,6 +44,18 @@ public class MotionDetector {
                 long now = System.currentTimeMillis();
                 if (now-lastCheck > checkInterval) {
                     lastCheck = now;
+
+                    //刚启动摄像头图像不稳，可能误判，因此忽略前面几帧
+                    if(detectCount < 5){
+                        detectCount++;
+                        mCamera.addCallbackBuffer(mBuffer);
+                        continue;
+                    }
+
+
+                    if(safeToTakePicture == false){
+                        continue;
+                    }
 
                     if (nextData.get() != null) {
                         int[] img = ImageProcessing.decodeYUV420SPtoLuma(nextData.get(), nextWidth.get(), nextHeight.get());
@@ -55,7 +84,20 @@ public class MotionDetector {
                                     }
                                 });
                             }
+
+                            if(safeToTakePicture == true){
+                                if(contentType == 0){
+                                    //takePicturefromJpg();
+                                    takePicturefromRaw(nextData.get(), nextWidth.get(), nextHeight.get());
+                                }else if(contentType == 1){
+                                    takeVideo();
+                                }
+                            }
+
                         }
+
+                        if(inPreview)
+                            mCamera.addCallbackBuffer(mBuffer);
                     }
                 }
                 try {
@@ -68,7 +110,7 @@ public class MotionDetector {
     }
 
     private final AggregateLumaMotionDetection detector;
-    private long checkInterval = 500;
+    private long checkInterval = 200;
     private long lastCheck = 0;
     private MotionDetectorCallback motionDetectorCallback;
     private Handler mHandler = new Handler();
@@ -85,10 +127,26 @@ public class MotionDetector {
     private Context mContext;
     private SurfaceView mSurface;
 
+    SurfaceTexture mSurfaceTexture;
+    private int cameraId = Camera.CameraInfo.CAMERA_FACING_FRONT;
+    private String dirString = null;
+    private byte[] mBuffer;
+    private boolean safeToTakePicture = true;
+    private long detectCount;
+    private int contentType = 0;
+    private static MotionDetector mMotionDetector = null;
+
+
     public MotionDetector(Context context, SurfaceView previewSurface) {
         detector = new AggregateLumaMotionDetection();
         mContext = context;
-        mSurface = previewSurface;
+
+        if(previewSurface == null){
+            mSurfaceTexture = new SurfaceTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES);
+            mSurface = null;
+        }else{
+            mSurface = previewSurface;
+        }
     }
 
     public void setMotionDetectorCallback(MotionDetectorCallback motionDetectorCallback) {
@@ -113,6 +171,32 @@ public class MotionDetector {
         detector.setLeniency(l);
     }
 
+    public void setCamera(int c){
+        if( c == 0){
+            cameraId = Camera.CameraInfo.CAMERA_FACING_FRONT;
+        }
+        else if(c == 1){
+            cameraId = Camera.CameraInfo.CAMERA_FACING_BACK;
+        }
+    }
+
+    public void setContentType(int type){
+        contentType = type;
+    }
+
+    public void setDirString(String dir){
+        dirString = dir;
+    }
+
+    public static MotionDetector getInstance()
+    {
+        if(mMotionDetector == null){
+            //mMotionDetector = new MotionDetector(getApplicationContext(), null);
+        }
+
+        return mMotionDetector;
+    }
+
     public void onResume() {
         if (checkCameraHardware()) {
             mCamera = getCameraInstance();
@@ -120,10 +204,33 @@ public class MotionDetector {
             worker = new MotionDetectorThread();
             worker.start();
 
-            // configure preview
-            previewHolder = mSurface.getHolder();
-            previewHolder.addCallback(surfaceCallback);
-            previewHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+            if(mSurface == null){
+                try {
+                    mCamera.setPreviewTexture(mSurfaceTexture);
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+
+                Camera.Parameters parameters = mCamera.getParameters();
+                parameters.setPreviewSize(1280, 720);
+                int size2 = 1920 * 1080 * 3;
+                //size2  = size2 * ImageFormat.getBitsPerPixel(parameters.getPreviewFormat()) / 8;
+                mBuffer = new byte[size2]; // class variable
+                mCamera.addCallbackBuffer(mBuffer);
+                mCamera.setPreviewCallbackWithBuffer(previewCallback);
+
+                mCamera.setParameters(parameters);
+                mCamera.startPreview();
+                inPreview = true;
+
+            }else{
+                // configure preview
+                previewHolder = mSurface.getHolder();
+                previewHolder.addCallback(surfaceCallback);
+                previewHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
+            }
+
+            detectCount = 0;
         }
     }
 
@@ -143,7 +250,7 @@ public class MotionDetector {
         try {
             if (Camera.getNumberOfCameras() >= 2) {
                 //if you want to open front facing camera use this line
-                c = Camera.open(Camera.CameraInfo.CAMERA_FACING_FRONT);
+                c = Camera.open(cameraId);
             } else {
                 c = Camera.open();
             }
@@ -165,7 +272,7 @@ public class MotionDetector {
             if (data == null) return;
             Camera.Size size = cam.getParameters().getPreviewSize();
             if (size == null) return;
-
+            Log.d("MotionDetectorSSSSSSSSS", "Using width=" + size.width + " height=" + size.height);
             consume(data, size.width, size.height);
         }
     };
@@ -180,7 +287,7 @@ public class MotionDetector {
         public void surfaceCreated(SurfaceHolder holder) {
             try {
                 mCamera.setPreviewDisplay(previewHolder);
-                mCamera.setPreviewCallback(previewCallback);
+                //mCamera.setPreviewCallback(previewCallback);
             } catch (Throwable t) {
                 Log.e("MotionDetector", "Exception in setPreviewDisplay()", t);
             }
@@ -197,6 +304,17 @@ public class MotionDetector {
                 parameters.setPreviewSize(size.width, size.height);
                 Log.d("MotionDetector", "Using width=" + size.width + " height=" + size.height);
             }
+
+            parameters.setPreviewSize(1280, 720);
+            //parameters.setPictureSize(1280, 720);
+            //parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_FIXED);
+
+            int size2 = 1920 * 1080 * 3;
+            //size2  = size2 * ImageFormat.getBitsPerPixel(parameters.getPreviewFormat()) / 8;
+            mBuffer = new byte[size2]; // class variable
+            mCamera.addCallbackBuffer(mBuffer);
+            mCamera.setPreviewCallbackWithBuffer(previewCallback);
+
             mCamera.setParameters(parameters);
             mCamera.startPreview();
             inPreview = true;
@@ -244,5 +362,155 @@ public class MotionDetector {
             mCamera.release();        // release the camera for other applications
             mCamera = null;
         }
+    }
+
+    private class PhotoHandler implements Camera.PictureCallback {
+
+        @Override
+        public void onPictureTaken(byte[] data, android.hardware.Camera camera) {
+            try {
+                String fileSrting = getFileString() + ".jpg";
+                File outFile = new File(fileSrting);
+                FileOutputStream outStream = new FileOutputStream(outFile);
+                outStream.write(data);
+                outStream.flush();
+                outStream.close();
+
+                Log.d("MotionDetector", "onPictureTaken - wrote bytes: " + data.length + " to " + outFile.getAbsolutePath());
+
+                mediaScanBc(fileSrting);
+
+            } catch (FileNotFoundException e) {
+                e.printStackTrace();
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+            }
+
+            mCamera.startPreview();
+
+            new Handler().postDelayed(new Runnable(){
+                public void run() {
+                    safeToTakePicture = true;
+                }
+            }, 1000);
+        }
+    }
+
+    private void takePicturefromRaw(byte[] yuv420sp, int width, int height) {
+        safeToTakePicture = false;
+        detector.clear();
+
+        int[] rgb = ImageProcessing.decodeYUV420SPtoRGB(yuv420sp, width, height);
+        Bitmap bitmap = Bitmap.createBitmap(rgb, nextWidth.get(), nextHeight.get(), Bitmap.Config.ARGB_8888);
+
+        final String fileSrting = getFileString() + ".jpg";
+        File outFile = new File(fileSrting);
+        try {
+            FileOutputStream fos = new FileOutputStream(outFile);
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 80, fos);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+
+        mediaScanBc(fileSrting);
+
+        if (motionDetectorCallback != null) {
+            mHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    motionDetectorCallback.onContent(fileSrting);
+                }
+            });
+        }
+
+        try {
+            Thread.sleep(2000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        safeToTakePicture = true;
+        detectCount = 2;    //防止之前残余帧引起的误判断
+    }
+
+    private void takeVideo(){
+        safeToTakePicture = false;
+        detector.clear();
+
+        mCamera.unlock();
+
+        MediaRecorder recorder = new MediaRecorder();
+        recorder.setCamera(mCamera);
+        recorder.setVideoSource(MediaRecorder.VideoSource.CAMERA);
+        recorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+
+        // 3: Set parameters, Following code does the same as getting a CamcorderProfile (but customizable)
+        recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+        // 3.1 Video Settings
+        recorder.setVideoSize(1280, 720);
+        recorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+        recorder.setVideoEncodingBitRate(500000);
+        recorder.setVideoFrameRate(15);
+        // 3.2 Audio Settings
+        recorder.setAudioChannels(1);
+        recorder.setAudioSamplingRate(44100);
+        recorder.setAudioEncoder(MediaRecorder.AudioEncoder.DEFAULT);
+        recorder.setAudioEncodingBitRate(16);
+
+        // Step 4: Set output file
+        String fileSrting = getFileString() + ".mp4";
+        recorder.setOutputFile(fileSrting);
+
+        try {
+            recorder.prepare();
+            recorder.start();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
+        try {
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+
+        recorder.stop();
+        recorder.release();
+
+        mediaScanBc(fileSrting);
+
+        safeToTakePicture = true;
+        detectCount = 2;
+    }
+
+    private void takePicturefromJpg(){
+        safeToTakePicture = false;
+        detector.clear();
+        mCamera.takePicture(null, null, new PhotoHandler());
+    }
+
+    private String getFileString(){
+        if(dirString == null){
+            File sdCard = Environment.getExternalStorageDirectory();
+            dirString = sdCard.getAbsolutePath() + "/MotionDetector";
+        }
+        File dir = new File(dirString);
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+
+        Date date = new Date(System.currentTimeMillis());
+        SimpleDateFormat dateFormat = new SimpleDateFormat("'Motion'_yyyyMMdd_HHmmss");
+        String fileName = dir + "/" + dateFormat.format(date);
+        Log.d("MotionDetector", "###############:" + fileName);
+
+        return fileName;
+    }
+
+    private void mediaScanBc(String fileString){
+        Intent mediaScanIntent = new Intent( Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
+        mediaScanIntent.setData(Uri.fromFile(new File(fileString)));
+        mContext.sendBroadcast(mediaScanIntent);
     }
 }
