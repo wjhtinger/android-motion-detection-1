@@ -198,40 +198,45 @@ public class MotionDetector {
     }
 
     public void onResume() {
-        if (checkCameraHardware()) {
-            mCamera = getCameraInstance();
+        if(mCamera == null){
+            if (checkCameraHardware()) {
+                mCamera = getCameraInstance();
 
-            worker = new MotionDetectorThread();
-            worker.start();
+                worker = new MotionDetectorThread();
+                worker.start();
 
-            if(mSurface == null){
-                try {
-                    mCamera.setPreviewTexture(mSurfaceTexture);
-                } catch (IOException e) {
-                    e.printStackTrace();
+                if(mSurface == null){
+                    try {
+                        mCamera.setPreviewTexture(mSurfaceTexture);
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+
+                    Camera.Parameters parameters = mCamera.getParameters();
+                    parameters.setPreviewSize(1280, 720);
+                    //parameters.setPreviewFpsRange(5, 15);
+                    int size2 = 1920 * 1080 * 3;
+                    //size2  = size2 * ImageFormat.getBitsPerPixel(parameters.getPreviewFormat()) / 8;
+                    mBuffer = new byte[size2]; // class variable
+                    mCamera.addCallbackBuffer(mBuffer);
+                    mCamera.setPreviewCallbackWithBuffer(previewCallback);
+
+                    mCamera.setParameters(parameters);
+                    mCamera.startPreview();
+                    inPreview = true;
+
+                }else{
+                    // configure preview
+                    previewHolder = mSurface.getHolder();
+                    previewHolder.addCallback(surfaceCallback);
+                    previewHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
                 }
 
-                Camera.Parameters parameters = mCamera.getParameters();
-                parameters.setPreviewSize(1280, 720);
-                int size2 = 1920 * 1080 * 3;
-                //size2  = size2 * ImageFormat.getBitsPerPixel(parameters.getPreviewFormat()) / 8;
-                mBuffer = new byte[size2]; // class variable
-                mCamera.addCallbackBuffer(mBuffer);
-                mCamera.setPreviewCallbackWithBuffer(previewCallback);
 
-                mCamera.setParameters(parameters);
-                mCamera.startPreview();
-                inPreview = true;
-
-            }else{
-                // configure preview
-                previewHolder = mSurface.getHolder();
-                previewHolder.addCallback(surfaceCallback);
-                previewHolder.setType(SurfaceHolder.SURFACE_TYPE_PUSH_BUFFERS);
             }
-
-            detectCount = 0;
         }
+
+        detectCount = 0;
     }
 
     public boolean checkCameraHardware() {
@@ -459,7 +464,7 @@ public class MotionDetector {
         recorder.setAudioEncodingBitRate(16);
 
         // Step 4: Set output file
-        String fileSrting = getFileString() + ".mp4";
+        final String fileSrting = getFileString() + ".mp4";
         recorder.setOutputFile(fileSrting);
 
         try {
@@ -479,6 +484,15 @@ public class MotionDetector {
         recorder.release();
 
         mediaScanBc(fileSrting);
+
+        if (motionDetectorCallback != null) {
+            mHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    motionDetectorCallback.onContent(fileSrting);
+                }
+            });
+        }
 
         safeToTakePicture = true;
         detectCount = 2;
@@ -512,5 +526,10 @@ public class MotionDetector {
         Intent mediaScanIntent = new Intent( Intent.ACTION_MEDIA_SCANNER_SCAN_FILE);
         mediaScanIntent.setData(Uri.fromFile(new File(fileString)));
         mContext.sendBroadcast(mediaScanIntent);
+    }
+
+    protected void finalize()
+    {
+        onPause();
     }
 }
